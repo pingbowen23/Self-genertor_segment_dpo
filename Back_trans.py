@@ -3,19 +3,31 @@ import pandas as pd
 import json
 import os
 import re
+import argparse
+
 def get_instruction(text):
     text = f'''
-    Assume the author of the provided text followed a detailed set of instructions to produce their work. Your task is to infer what those original instructions may have been by composing your own set of instructions that could recreate key aspects of the given text.\n\nYour response must include:\n\n  1. An overarching instruction under the "Main Instruction" section that summarizes the goal of the instructions.
-    ### Document:
+    You're an expert in creating instructions that closely align with the provided text. Assume the author of the provided text followed a detailed set of instructions to produce their work. Your task is to infer what those original instructions may have been by composing your own set of instructions that could recreate key aspects of the given text. You can follow these guiding principles: 
+    1.**Comprehension**: ensure you fully grasp the content and purpose of the given text.     
+    2.**Clarity and Precision**: make the instruction as specific as possible, avoiding ambiguity.
+    3.**Creativity**: depending on the context, consider whether the instruction should allow for some creativity or personalization.\n\nYour task is to generate the following four types of instructions corresponding to the provided long document:
+    1. **Precise Instruction**: Provide a writing instruction in fewer than 100 words.
+    2. **Medium Instruction**: Offer a writing instruction of around 256 words, including more comprehensive details than the concise instruction.
+    3. **Long Instruction**: Craft a writing instruction of approximately 500 words, incorporating additional details and context related to the document.
+    4. **Extremely Long Instruction**: Develop a writing instruction of about 1000 words, thoroughly aligned with the document by including sufficient foundational elements and structural information.
+    ### The document begins as follows:
     {text}
-    ### Your response:
-    '''
-
+    ### The document ends here.\nPlease follow this format, do not include any other content:\n\nPrecise Instruction:\n\nMedium Instruction:\n\nLong Instruction:\n\nExtremely Long Instruction:\n\n"
+  '''
+    
     completion = client.chat.completions.create(
         model="gpt-4-1106-preview", # 
         messages=[
             {"role": "user", "content": text}
-        ]
+        ],
+        temperature=1.0,
+        # max_tokens=1000,
+        top_p=1,
     )
     return completion.choices[0].message.content
 
@@ -34,7 +46,39 @@ def get_score(instruction,response):
     return completion.choices[0].message.content
     
 
+# 提取各部分内容
+def extract_instruction(text, instruction_type):
+    if instruction_type == "Precise Instruction":
+        pattern = r"Precise Instruction:(.*?)(?=\n\nMedium Instruction:|$)"
+    elif instruction_type == "Medium Instruction":
+        pattern = r"Medium Instruction:(.*?)(?=\n\nLong Instruction:|$)"
+    elif instruction_type == "Long Instruction":
+        pattern = r"Long Instruction:(.*?)(?=\n\nExtremely Long Instruction:|$)"
+    elif instruction_type == "Extremely Long Instruction":
+        pattern = r"Extremely Long Instruction:(.*)"
+    else:
+        return None
+    
+    match = re.search(pattern, text, re.DOTALL)
+    return match.group(1).strip() if match else None
+
+def extract_content(data_file,idx):
+    df=pd.read_parquet(data_file)
+    linejson=json.loads(df['clean_content'][idx])
+    line={}
+    line['context']=linejson['markdown']
+            # line['question']='请总结这本书：'
+            #line['question']='The summary of the book is:'
+    return line["context"]
+
+
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--context_len_min', type=int)
+    parser.add_argument('--context_len_max', type=int)
+    parser.add_argument('--number', type=int, default=0)
+    args = parser.parse_args()
+        
     client = OpenAI(
         api_key='sk-TMDtm8NkAIaXwgS03a80CbAa21C940B793348993FbB288Ed',
         base_url='https://yeysai.com/v1/'
@@ -42,31 +86,54 @@ if __name__ == '__main__':
     
     directory = '/data/public/wangshuo/LongContext/data/0722_mb_data/en.boke_kindle_mobi/version=2024-02-22-12/'
     files = os.listdir(directory)
-    # text = None
-    # instruction = get_instruction("this is a test")
-    # score = get_score(instruction, "this is a test")
-    # json_match = re.search(r'\{.*?\}',score , re.DOTALL)
-    # json_str = json_match.group(0)
-    # data = json.loads(json_str)
+    text = None
+    records = []
+    
+    flag = False
     for filename in files:
         df = pd.read_parquet(os.path.join(directory, filename))
         df["clean_content"] = df["clean_content"].apply(json.loads)
-        for content in df["clean_content"]:
+        
+        if flag == True:
+            break
+        
+        for idx,content in enumerate(df["clean_content"]):
             length = content.get("n_words",-1)
             
-            if length != -1 and length <= 32000:
-                text = content.get("markdown")
-                instruction = get_instruction(text)
-                main_instruction_match = re.search(r'### Main Instruction:\s*(.*?)(\n###|$)', instruction, re.DOTALL)
+            if length != -1 and length <= args.context_len_max and length >= args.context_len_min:
+                response = content.get("markdown")
+                instructions = get_instruction(response)
                 
-                if main_instruction_match:
-                    main_instruction_content = main_instruction_match.group(1).strip()
+                precise_instruction = extract_instruction(instructions, "Precise Instruction")
+                medium_instruction = extract_instruction(instructions, "Medium Instruction")
+                long_instruction = extract_instruction(instructions, "Long Instruction")
+                extremely_long_instruction = extract_instruction(instructions, "Extremely Long Instruction")
+                record = {
+                    "response": response,
+                    "precise_instruction": precise_instruction,
+                    "medium_instruction": medium_instruction,
+                    "long_instruction": long_instruction,
+                    "extremely_long_instruction": extremely_long_instruction
+                }
+                records.append(record)
                 
-                score = get_score(instruction, "this is a test")
-                json_match = re.search(r'\{.*?\}',score , re.DOTALL)
+                if len(records) % args.number == 0: # 
+                    flag = True
+                    if flag == True:
+                        break
                 
-                if json_match:
-                    json_str = json_match.group(0)
-                    data = json.loads(json_str)
+                # score = get_score(instruction, "this is a test")
+                # json_match = re.search(r'\{.*?\}',score , re.DOTALL)
+                
+                # if json_match:
+                #     json_str = json_match.group(0)
+                #     data = json.loads(json_str)
             elif length == -1:
                 print(df.head())
+                
+    output_file = './data/output.jsonl'
+
+    with open(output_file, 'a',encoding='utf-8') as f:
+        for record in records:
+            json.dump(record, f,ensure_ascii=False)
+            f.write('\n')
