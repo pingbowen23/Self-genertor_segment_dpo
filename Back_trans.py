@@ -60,7 +60,7 @@ def extract_instruction(text, instruction_type):
         return None
     
     match = re.search(pattern, text, re.DOTALL)
-    return match.group(1).strip() if match else None
+    return match.group(1).strip() if match else ""
 
 def extract_content(data_file,idx):
     df=pd.read_parquet(data_file)
@@ -71,6 +71,18 @@ def extract_content(data_file,idx):
             #line['question']='The summary of the book is:'
     return line["context"]
 
+
+def retain_first_32k_words(text):
+    # 将文本按空格分割为单词列表
+    words = text.split()
+    
+    # 保留前32k个单词
+    first_32k_words = words[:32000]
+    
+    # 将保留的单词重新组合为文本
+    truncated_text = ' '.join(first_32k_words)
+    
+    return truncated_text
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -102,7 +114,9 @@ if __name__ == '__main__':
             
             if length != -1 and length <= args.context_len_max and length >= args.context_len_min:
                 response = content.get("markdown")
-                instructions = get_instruction(response)
+                response = retain_first_32k_words(response)
+                instructions = ""
+                # instructions = get_instruction(response)
                 
                 precise_instruction = extract_instruction(instructions, "Precise Instruction")
                 medium_instruction = extract_instruction(instructions, "Medium Instruction")
@@ -131,9 +145,9 @@ if __name__ == '__main__':
             elif length == -1:
                 print(df.head())
                 
-    output_file = './data/output.jsonl'
+    output_file = './data/output_32k+.jsonl'
 
-    with open(output_file, 'a',encoding='utf-8') as f:
+    with open(output_file, 'w',encoding='utf-8') as f:
         for record in records:
             json.dump(record, f,ensure_ascii=False)
             f.write('\n')
